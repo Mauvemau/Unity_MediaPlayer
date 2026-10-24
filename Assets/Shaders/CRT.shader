@@ -176,7 +176,7 @@ Shader "Effects/CRT"
                 finalRgb *= flicker;
 
                 // 7. Polished Glass Specular & Fresnel Rim Reflection
-                float3 virtualLightDir = normalize(float3(0.3, 1.0, -0.8));
+                float3 virtualLightDir = normalize(float3(0.0, 1.0, -1.0));
                 float3 normalWS = normalize(IN.normalWS);
                 float3 viewDirWS = normalize(_WorldSpaceCameraPos - IN.positionWS);
                 
