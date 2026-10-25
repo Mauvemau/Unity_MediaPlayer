@@ -849,7 +849,7 @@ Transform:
   m_GameObject: {fileID: 1897387592}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -1.553, y: 1.68, z: -9.25}
+  m_LocalPosition: {x: -1.6, y: 1.68, z: -9.45}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1066,9 +1066,9 @@ MonoBehaviour:
   - {fileID: 1627175484}
   - {fileID: 1111314412}
   _playlist:
-  - {fileID: 32900000, guid: 0344709aa2e8f22f4955470587f7d7c6, type: 3}
-  - {fileID: 32900000, guid: 18130234570ba0843b8804a9cb433aea, type: 3}
-  - {fileID: 32900000, guid: 09412ce8290ba32439a3aa6f38260d0f, type: 3}
+  - {fileID: 32900000, guid: 6b8b4e332cde37d75b811c882bc86db6, type: 3}
+  - {fileID: 32900000, guid: 678a1ed75f74e1f9390ea9f1e4c46f0c, type: 3}
+  - {fileID: 32900000, guid: e29fafff28a9d0224ad9ca19e610ffb1, type: 3}
   _currentIndex: 0
   _loopCurrentVideo: 0
 --- !u!4 &2011125712
