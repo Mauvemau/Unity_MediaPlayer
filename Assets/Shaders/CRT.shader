@@ -29,6 +29,14 @@ Shader "Effects/CRT"
         _GlossIntensity("Glass Gloss Intensity", Range(0.0, 2.0)) = 0.6
         _GlossPower("Glass Shininess (Exponent)", Range(32.0, 512.0)) = 256.0
         _FresnelStrength("Glass Fresnel Strength", Range(0.0, 1.0)) = 0.4
+
+        [Header(Signal Loss and Static)]
+        _StaticIntensity("Static / Signal Noise Intensity", Range(0.0, 3.0)) = 0.0
+        _StaticSpeed("Static Animation Speed", Float) = 1.0
+
+        [Header(Horizontal Jitter and Tear)]
+        _JitterIntensity("Horizontal Jitter Intensity", Range(0.0, 1.0)) = 0.0
+        _JitterSpeed("Horizontal Jitter Speed", Float) = 15.0
     }
 
     SubShader
@@ -85,6 +93,10 @@ Shader "Effects/CRT"
                 float _GlossIntensity;
                 float _GlossPower;
                 float _FresnelStrength;
+                float _StaticIntensity;
+                float _StaticSpeed;
+                float _JitterIntensity;
+                float _JitterSpeed;
             CBUFFER_END
 
             Varyings vert(Attributes IN)
@@ -120,17 +132,93 @@ Shader "Effects/CRT"
                 return exp(-GLOW_FALLOFF * x * x);
             }
 
+            // Simplex Noise Functions
+            float3 mod289(float3 x) {
+                return x - floor(x * (1.0 / 289.0)) * 289.0;
+            }
+
+            float2 mod289(float2 x) {
+                return x - floor(x * (1.0 / 289.0)) * 289.0;
+            }
+
+            float3 permute(float3 x) {
+                return mod289(((x * 34.0) + 1.0) * x);
+            }
+
+            float snoise(float2 v) {
+                const float4 C = float4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+                float2 i  = floor(v + dot(v, C.yy));
+                float2 x0 = v - i + dot(i, C.xx);
+                float2 i1 = (x0.x > x0.y) ? float2(1.0, 0.0) : float2(0.0, 1.0);
+                float4 x12 = x0.xyxy + C.xxzz;
+                x12.xy -= i1;
+                i = mod289(i);
+                float3 p = permute(permute(i.y + float3(0.0, i1.y, 1.0)) + i.x + float3(0.0, i1.x, 1.0));
+                float3 m = max(0.5 - float3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+                m = m * m;
+                m = m * m;
+                float3 x = 2.0 * frac(p * C.www) - 1.0;
+                float3 h = abs(x) - 0.5;
+                float3 ox = floor(x + 0.5);
+                float3 a0 = x - ox;
+                m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+                float3 g;
+                g.x  = a0.x  * x0.x  + h.x  * x0.y;
+                g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+                return 130.0 * dot(m, g);
+            }
+
             half4 frag(Varyings IN) : SV_Target
             {
-                // 1. Chromatic Aberration
-                float2 uvCenter = IN.uv - 0.5;
-                float2 uvR = IN.uv + uvCenter * _AberrationStrength;
-                float2 uvB = IN.uv - uvCenter * _AberrationStrength;
+                // 0. Horizontal Jitter / Tear (Loss of Sync)
+                float2 glitchUV = IN.uv;
+                if (_JitterIntensity > 0.001)
+                {
+                    float jitterTime = _Time.y * _JitterSpeed;
+                    // High-frequency line fuzz
+                    float fuzzOffset = snoise(float2(jitterTime, IN.uv.y * 80.0));
+                    // Occasional large structural screen tear bands
+                    float largeJitter = step(0.90, snoise(float2(_Time.y * 2.5, IN.uv.y * 6.0))) * snoise(float2(_Time.y * 20.0, 1.0));
+                    
+                    float xJitterOffset = (fuzzOffset * 0.003 + largeJitter * 0.07) * _JitterIntensity;
+                    glitchUV.x += xJitterOffset;
+                }
+
+                // 1. Chromatic Aberration (Using glitched UVs)
+                float2 uvCenter = glitchUV - 0.5;
+                float2 uvR = glitchUV + uvCenter * _AberrationStrength;
+                float2 uvB = glitchUV - uvCenter * _AberrationStrength;
 
                 half r = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uvR).r;
-                half g = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).g;
-                half b = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uvB).b;
-                half4 texColor = half4(r, g, b, 1.0) * _BaseColor;
+                half g = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, glitchUV).g;
+                half4 texColor = half4(r, g, SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uvB).b, 1.0) * _BaseColor;
+
+                // 1.5. Analog Static & Noise Bands
+                if (_StaticIntensity > 0.001)
+                {
+                    float timeVal = _Time.y * _StaticSpeed;
+                    float staticVal = 0.0;
+
+                    [unroll]
+                    for (float ySample = -1.0; ySample <= 1.0; ySample += 1.0)
+                    {
+                        float maxDist = 5.0 / 200.0;
+                        float dist = ySample / 200.0;
+                        float2 sampleUV = float2(glitchUV.x, glitchUV.y + dist);
+
+                        float staticHeight = snoise(float2(9.0, timeVal * 1.2 + 3.0)) * 0.3 + 5.0;
+                        float staticAmount = snoise(float2(1.0, timeVal * 1.2 - 6.0)) * 0.1 + 0.3;
+                        float staticStrength = snoise(float2(-9.75, timeVal * 0.6 - 3.0)) * 2.0 + 2.0;
+                        
+                        float noise_val = snoise(float2(5.0 * pow(timeVal, 2.0) + pow(sampleUV.x * 7.0, 1.2), pow((fmod(timeVal, 100.0) + 100.0) * (1.0 - sampleUV.y) * 0.3 + 3.0, staticHeight)));
+                        float sVal = (1.0 - step(noise_val, staticAmount)) * staticStrength;
+                        
+                        staticVal += sVal * (maxDist - abs(dist)) * 1.5;
+                    }
+
+                    staticVal *= _StaticIntensity * 1.2;
+                    texColor.rgb += staticVal;
+                }
 
                 // 2. Phosphor Bloom / Halation
                 half3 bloomSum = 0.0;
@@ -144,7 +232,7 @@ Shader "Effects/CRT"
                         float2 offset = float2(x, y) * texelSize;
                         float weight = GetKernelWeight(x) * GetKernelWeight(y);
                         
-                        half3 sampleCol = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv + offset).rgb;
+                        half3 sampleCol = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, glitchUV + offset).rgb;
                         float luma = dot(sampleCol, float3(0.299, 0.587, 0.114));
                         float threshold = saturate((luma - 0.3) * 3.0);
                         
@@ -180,16 +268,13 @@ Shader "Effects/CRT"
                 float3 normalWS = normalize(IN.normalWS);
                 float3 viewDirWS = normalize(_WorldSpaceCameraPos - IN.positionWS);
                 
-                // Sharp Specular Glint
                 float3 halfDir = normalize(virtualLightDir + viewDirWS);
                 float NdotH = saturate(dot(normalWS, halfDir));
                 float specular = pow(NdotH, _GlossPower) * _GlossIntensity;
 
-                // Fresnel Edge Sheen (Glass catches reflections on curved boundaries)
                 float NdotV = saturate(dot(normalWS, viewDirWS));
                 float fresnel = pow(1.0 - NdotV, 4.0) * _FresnelStrength;
 
-                // Combine specular glint and edge glass reflection
                 finalRgb += float3(1.0, 1.0, 1.0) * (specular + fresnel);
 
                 return half4(finalRgb, texColor.a);
