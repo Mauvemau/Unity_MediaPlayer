@@ -1069,6 +1069,7 @@ MonoBehaviour:
   - {fileID: 32900000, guid: 0344709aa2e8f22f4955470587f7d7c6, type: 3}
   - {fileID: 32900000, guid: 18130234570ba0843b8804a9cb433aea, type: 3}
   - {fileID: 32900000, guid: 09412ce8290ba32439a3aa6f38260d0f, type: 3}
+  - {fileID: 32900000, guid: d7b97a0d18c126a3abdcdc2121ff6b83, type: 3}
   _currentIndex: 0
   _loopCurrentVideo: 0
 --- !u!4 &2011125712

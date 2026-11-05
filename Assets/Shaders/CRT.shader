@@ -5,38 +5,39 @@ Shader "Effects/CRT"
         [MainColor] _BaseColor("Base Color", Color) = (1, 1, 1, 1)
         [MainTexture] _BaseMap("Base Map", 2D) = "white" {}
         
-        [Header(Rounded Rectangular Vignette)]
+        [Header(Rectangular Vignette)]
         _VignetteLength("Vignette Length", Range(0.1, 0.5)) = 0.45
         _VignetteHeight("Vignette Height", Range(0.1, 0.5)) = 0.45
         _VignetteRoundness("Vignette Roundness", Range(0.0, 0.2)) = 0.05
         _VignetteIntensity("Vignette Intensity", Range(0.0, 10.0)) = 2.0
 
-        [Header(CRT Retro Effects)]
+        [Header(CRT Effects)]
         _ScanlineIntensity("Scanline Intensity", Range(0.0, 1.0)) = 0.4
         _ScanlineCount("Scanline Count", Float) = 240.0
-        _MaskStrength("Mask Strength (Triads)", Range(0.0, 1.0)) = 0.3
+        _MaskStrength("Mask Strength", Range(0.0, 1.0)) = 0.3
         _MaskSize("Mask Size", Range(1.0, 4.0)) = 1.0
 
-        [Header(Color and Light Bleed)]
-        _AberrationStrength("Chromatic Aberration (RGB Shift)", Range(0.0, 0.01)) = 0.002
+        [Header(Bloom and Bleed)]
+        _AberrationStrength("Chromatic Aberration", Range(0.0, 0.01)) = 0.002
         _BloomIntensity("Phosphor Bloom Intensity", Range(0.0, 1.0)) = 0.3
 
         [Header(CRT Flicker)]
         _FlickerIntensity("Flicker Intensity", Range(0.0, 0.1)) = 0.015
         _FlickerSpeed("Flicker Speed", Float) = 40.0
 
-        [Header(Glass Specular and Fresnel)]
-        _GlossIntensity("Glass Gloss Intensity", Range(0.0, 2.0)) = 0.6
-        _GlossPower("Glass Shininess (Exponent)", Range(32.0, 512.0)) = 256.0
-        _FresnelStrength("Glass Fresnel Strength", Range(0.0, 1.0)) = 0.4
+        [Header(Glass Specular)]
+        _GlossIntensity("Gloss Intensity", Range(0.0, 2.0)) = 0.6
+        _GlossPower("Shininess (Exponent)", Range(32.0, 512.0)) = 256.0
+        _FresnelStrength("Fresnel Strength", Range(0.0, 1.0)) = 0.4
 
-        [Header(Signal Loss and Static)]
-        _StaticIntensity("Static / Signal Noise Intensity", Range(0.0, 3.0)) = 0.0
-        _StaticSpeed("Static Animation Speed", Float) = 1.0
+        [Header(Signal Loss Static)]
+        _StaticIntensity("Noise Intensity", Range(0.0, 10.0)) = 0.0
+        _StaticSpeed("Static Speed", Float) = 1.0
+        _StaticResolution("Static Grain Blockiness", Range(64.0, 512.0)) = 200.0
 
-        [Header(Horizontal Jitter and Tear)]
-        _JitterIntensity("Horizontal Jitter Intensity", Range(0.0, 1.0)) = 0.0
-        _JitterSpeed("Horizontal Jitter Speed", Float) = 15.0
+        [Header(Horizontal Tear)]
+        _JitterIntensity("Jitter Intensity", Range(0.0, 1.0)) = 0.0
+        _JitterSpeed("Jitter Speed", Float) = 15.0
     }
 
     SubShader
@@ -95,6 +96,7 @@ Shader "Effects/CRT"
                 float _FresnelStrength;
                 float _StaticIntensity;
                 float _StaticSpeed;
+                float _StaticResolution;
                 float _JitterIntensity;
                 float _JitterSpeed;
             CBUFFER_END
@@ -168,6 +170,15 @@ Shader "Effects/CRT"
                 return 130.0 * dot(m, g);
             }
 
+            // Non-banding hash with coordinate wrapping to prevent floating-point drift
+            float hashNoise(float2 p)
+            {
+                p = fmod(p, 500.0); // Prevents precision loss over time
+                float2 q = frac(p * float2(443.897, 441.423));
+                q += dot(q, q.yx + 19.19);
+                return frac(q.x * q.y);
+            }
+
             half4 frag(Varyings IN) : SV_Target
             {
                 // 0. Horizontal Jitter / Tear (Loss of Sync)
@@ -175,9 +186,7 @@ Shader "Effects/CRT"
                 if (_JitterIntensity > 0.001)
                 {
                     float jitterTime = _Time.y * _JitterSpeed;
-                    // High-frequency line fuzz
                     float fuzzOffset = snoise(float2(jitterTime, IN.uv.y * 80.0));
-                    // Occasional large structural screen tear bands
                     float largeJitter = step(0.90, snoise(float2(_Time.y * 2.5, IN.uv.y * 6.0))) * snoise(float2(_Time.y * 20.0, 1.0));
                     
                     float xJitterOffset = (fuzzOffset * 0.003 + largeJitter * 0.07) * _JitterIntensity;
@@ -193,31 +202,24 @@ Shader "Effects/CRT"
                 half g = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, glitchUV).g;
                 half4 texColor = half4(r, g, SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uvB).b, 1.0) * _BaseColor;
 
-                // 1.5. Analog Static & Noise Bands
+                // 1.5. True Organic Analog Static (Continuous flow, zero pattern repetition)
                 if (_StaticIntensity > 0.001)
                 {
-                    float timeVal = _Time.y * _StaticSpeed;
-                    float staticVal = 0.0;
+                    // Wrapped continuous time loop
+                    float t = fmod(_Time.y * _StaticSpeed * 15.0, 100.0);
 
-                    [unroll]
-                    for (float ySample = -1.0; ySample <= 1.0; ySample += 1.0)
-                    {
-                        float maxDist = 5.0 / 200.0;
-                        float dist = ySample / 200.0;
-                        float2 sampleUV = float2(glitchUV.x, glitchUV.y + dist);
+                    // Proportional grid block scaling matching 4:3
+                    float2 gridRes = float2(_StaticResolution * 1.3333, _StaticResolution);
+                    float2 blockUV = floor(glitchUV * gridRes);
 
-                        float staticHeight = snoise(float2(9.0, timeVal * 1.2 + 3.0)) * 0.3 + 5.0;
-                        float staticAmount = snoise(float2(1.0, timeVal * 1.2 - 6.0)) * 0.1 + 0.3;
-                        float staticStrength = snoise(float2(-9.75, timeVal * 0.6 - 3.0)) * 2.0 + 2.0;
-                        
-                        float noise_val = snoise(float2(5.0 * pow(timeVal, 2.0) + pow(sampleUV.x * 7.0, 1.2), pow((fmod(timeVal, 100.0) + 100.0) * (1.0 - sampleUV.y) * 0.3 + 3.0, staticHeight)));
-                        float sVal = (1.0 - step(noise_val, staticAmount)) * staticStrength;
-                        
-                        staticVal += sVal * (maxDist - abs(dist)) * 1.5;
-                    }
+                    // Multi-layer chaotic scrambling offset by independent prime multipliers
+                    float noise1 = hashNoise(blockUV + float2(t * 19.13, t * 47.89));
+                    float noise2 = hashNoise(floor(glitchUV * gridRes * 0.7) - float2(t * 31.23, t * 13.71));
 
-                    staticVal *= _StaticIntensity * 1.2;
-                    texColor.rgb += staticVal;
+                    // Combine layers into genuine, chaotic television snow
+                    float combinedStatic = saturate(noise1 * 0.6 + noise2 * 0.4);
+
+                    texColor.rgb += combinedStatic * _StaticIntensity * 0.6;
                 }
 
                 // 2. Phosphor Bloom / Halation
